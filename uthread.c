@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <ucontext.h>
 #include <string.h>
+#include <stdio.h>
 #include "uthread.h"
 
 // define a queue of user thread records
@@ -32,22 +33,36 @@ void enqueue(thread_info *thread) {
     thread_info *cur_thread = head;
     thread_info *last_thread = NULL;
 
-    while (cur_thread != NULL && thread->priority <= cur_thread->priority) {
+    // make sure the thread is not already queued
+    while (cur_thread != NULL) {
+        if (cur_thread->tid == thread->tid) {
+            return;
+        }
+        cur_thread = cur_thread->next;
+    }
+
+    cur_thread = head;
+    while (cur_thread != NULL && thread->priority >= cur_thread->priority) {
         last_thread = cur_thread;
         cur_thread = cur_thread->next;
     }
 
-    if (last_thread != NULL) {
-        last_thread->next = thread;
-    } else {
+    if (last_thread == NULL) {
+        // need to insert before head
+        thread->next = head;
         head = thread;
+    } else {
+        // inserting between elements or at end
+        thread->next = last_thread->next;
+        last_thread->next = thread;
     }
 }
+
 
 thread_info *dequeue() {
     thread_info *to_return = head;
 
-    if (head != NULL && head->next != NULL) {
+    if (head != NULL) {
         head = head->next;
     }
 
@@ -107,8 +122,7 @@ void uthread_yield() {
     }
 
     // save the current thread's information
-    thread_info *old_thread = (thread_info *) malloc(sizeof(thread_info));
-    old_thread->context = (ucontext_t *) malloc(sizeof(ucontext_t));
+    thread_info *old_thread = current_thread;
     enqueue(old_thread);
 
     // fetch and run the thread at the front of the ready queue
@@ -120,9 +134,10 @@ typedef struct message_s {
     void *content;
     int content_size;
     struct message_s *next;
-} message;
+} message_info;
 
-message *messages [100][100];
+message_info *messages [100][100];
+int needs_message[100][100];
 
 void save_message(int sender, int destination, void *content, int size) {
     // make a copy of the message content
@@ -130,12 +145,12 @@ void save_message(int sender, int destination, void *content, int size) {
     memcpy(content_copy, content, size);
 
     // initialize the message struct
-    message *new_message = (message*) malloc(sizeof (message));
+    message_info *new_message = (message_info *) malloc(sizeof (message_info));
     new_message->content = content_copy;
     new_message->content_size = size;
     new_message->next = NULL;
 
-    message *cur_message = messages[destination][sender];
+    message_info *cur_message = messages[destination][sender];
 
     if (cur_message == NULL) {
         // if there are no current messages for this recipient, start the
@@ -152,18 +167,43 @@ void save_message(int sender, int destination, void *content, int size) {
 }
 
 int uthread_send(int tid, void *content, int size) {
-    // check if tid is currently assigned to a thread
-    if (tid_assigned[tid] == NULL) {
+    save_message(current_thread->tid, tid, content, size);
+    thread_info *destination = tid_assigned[tid];
+
+    // if there is no thread with the given tid, then we just return -1
+    if (destination == NULL) {
         return -1;
     }
 
-    save_message(current_thread->tid, tid, content, size);
+    if (needs_message[tid][current_thread->tid]) {
+        // If the receiving thread is currently waiting on a message,
+        // put it back into the ready queue.
+        enqueue(destination);
+    }
 
     return 0;
 }
 
 int uthread_recv(int tid, void **content) {
-    return 0;
+    needs_message[current_thread->tid][tid] = 1;
+    if (messages[current_thread->tid][tid] == NULL) {
+        // If the requested message is not there, swap context without
+        // putting the current thread into the ready queue.
+        // uthread_send() will be responsible for enqueueing the requesting
+        // thread if the message becomes available.
+
+        thread_info *old_thread = current_thread;
+        current_thread = dequeue();
+        swapcontext(old_thread->context, current_thread->context);
+    }
+
+    // the only way to get here is if the requested message is ready
+    needs_message[current_thread->tid][tid] = 0;
+    message_info *message = messages[current_thread->tid][tid];
+    messages[current_thread->tid][tid] = message->next;
+
+    *content = message->content;
+    return message->content_size;
 }
 
 void uthread_init() {
@@ -174,6 +214,12 @@ void uthread_init() {
     for (i = 0; i < 100; i++) {
         for (j = 0; j < 100; j++) {
             messages[i][j] = NULL;
+        }
+    }
+
+    for (i = 0; i < 100; i++) {
+        for (j = 0; j < 100; j++) {
+            needs_message[i][j] = 0;
         }
     }
 

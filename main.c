@@ -50,12 +50,13 @@ void th2() {
         if (i == 2) {
             continue;
         }
-        printf("This is thread 2.\n");
+        printf("\nThis is thread 2.\n");
+
         char msg[256];
         sprintf(msg, "greeting from %d to %d", 2, i);
         uthread_send(i, msg, 256);
-
         printf("Thread %d has sent to Thread %d: %s\n", 2, i, msg);
+
         char *rcv_msg;
         uthread_recv(i, (void **) &rcv_msg);
         printf("Thread %d receives from Thread %d: %s\n", 2, i, rcv_msg);
