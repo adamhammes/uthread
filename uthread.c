@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <ucontext.h>
 #include <string.h>
-#include <stdio.h>
 #include "uthread.h"
 
 // define a queue of user thread records
